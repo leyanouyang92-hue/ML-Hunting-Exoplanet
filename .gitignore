@@ -205,3 +205,41 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 虚拟环境
+.venv/
+venv/
+
+# Streamlit 缓存/状态/密钥（但保留主题）
+.streamlit/*cache*/
+.streamlit/state/
+.streamlit/secrets.toml
+!.streamlit/config.toml
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 数据与模型产物
+data/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.zip
+models/
+checkpoints/
+*.pkl
+*.joblib
+*.h5
+
+# 日志
+logs/
+*.log
