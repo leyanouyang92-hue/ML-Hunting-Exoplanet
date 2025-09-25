@@ -2,6 +2,11 @@ import re
 import pandas as pd
 from .config import CANON_FEATURES, DISP_CANDS, LABEL_MAP
 
+# 新增：RA/DEC/距离候选列名（按你手头表格再补都行）
+RA_CANDS  = ["ra", "ra_deg", "raj2000", "rastr", "ra_str", "ra_j2000", "ra [deg]"]
+DEC_CANDS = ["dec", "dec_deg", "dej2000", "decstr", "dec_str", "dec_j2000", "decl", "declination", "dec [deg]"]
+DIST_CANDS = ["st_dist", "sy_dist", "dist", "distance", "st_dist", "plx", "parallax", "sy_plx"]
+
 def _clean_columns(df: pd.DataFrame) -> None:
     df.columns = (df.columns
                   .str.replace("\ufeff", "", regex=False)
@@ -38,7 +43,8 @@ def _pick_disposition(df: pd.DataFrame) -> str | None:
     return None
 
 def _drop_all_nan_features_only(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"label","label_raw","mission"}
+    # 修改：把 ra/dec/距离列加入保留
+    keep = {"label","label_raw","mission","ra","dec","dist_raw"}
     drop_cols = [c for c in df.columns if c not in keep and df[c].isna().all()]
     return df.drop(columns=drop_cols)
 
@@ -47,7 +53,7 @@ def harmonize_table(df: pd.DataFrame, mission: str) -> pd.DataFrame:
     _clean_columns(df)
 
     out = pd.DataFrame()
-    # 特征映射
+    # 特征映射（period/duration/depth/prad/srad/steff）
     for canon, alias in CANON_FEATURES.items():
         col = _pick_col(df, alias)
         out[canon] = df[col] if col else pd.NA
@@ -58,11 +64,23 @@ def harmonize_table(df: pd.DataFrame, mission: str) -> pd.DataFrame:
 
     # 统一标签
     raw = out["label_raw"].astype(str).str.upper().str.strip()
-    raw = raw.replace({  # 规范化别名
+    raw = raw.replace({
         "CONFIRMED PLANET": "CONFIRMED",
         "VALIDATED PLANET": "CONFIRMED",
     })
     out["label"] = raw.map(LABEL_MAP)  # PC / APC 等保持 NaN
+
+    # ★ 新增：把 RA/DEC/距离带出来（保持原始值，解析在 ui._to_xyz 里做）
+    ra_col  = _pick_col(df, RA_CANDS)
+    dec_col = _pick_col(df, DEC_CANDS)
+    dist_col = _pick_col(df, DIST_CANDS)
+
+    out["ra"]  = df[ra_col]  if ra_col  else pd.NA
+    out["dec"] = df[dec_col] if dec_col else pd.NA
+    if dist_col:
+        out["dist_raw"] = df[dist_col]
+    else:
+        out["dist_raw"] = pd.NA
 
     out["mission"] = mission
     out = _drop_all_nan_features_only(out)
