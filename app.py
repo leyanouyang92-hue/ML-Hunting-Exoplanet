@@ -63,7 +63,7 @@ for up, mission in [(koi_up, "Kepler"), (tess_up, "TESS"), (k2_up, "K2")]:
         dfs.append(h)
 
 if not dfs:
-    st.info("👉 左侧至少上传一个数据文件（Kepler/TESS/K2）。")
+    st.info("👉 At least one data file must be uploaded on the left side.（Kepler/TESS/K2）。")
     st.stop()
 
 df_all = pd.concat(dfs, ignore_index=True)
@@ -247,3 +247,4 @@ st.download_button(
     file_name="predictions_view.csv",
     mime="text/csv"
 )
+
