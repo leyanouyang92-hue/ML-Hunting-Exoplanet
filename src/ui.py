@@ -111,24 +111,47 @@ def render_universe_html(df: pd.DataFrame,
                          point_size: float = 3.0) -> str:
     df = df.copy()
     if len(df) > max_points:
-        df = df.sample(max_points, random_state=42)
+        df = df.sample(max_points, random_state=42).reset_index(drop=True)
 
+    # 位置：优先 RA/Dec，否则撒点
     pos = _to_xyz(df)
 
+    # 颜色：调亮蓝色（更容易与灰色区分）
     col = df[color_by] if color_by in df.columns else pd.Series([np.nan]*len(df))
     colors = []
     for v in col:
-        if pd.isna(v): colors.append("#666a7a")       # unknown
-        elif int(v) == 1: colors.append("#2E56A6")    # blue
-        else: colors.append("#E45757")                # red
+        if pd.isna(v): colors.append("#8A93A6")      # unknown / candidate（灰）
+        elif int(v) == 1: colors.append("#66B2FF")   # confirmed（更亮的蓝）
+        else: colors.append("#E45757")               # false positive（红）
+
+    # 名称 + 坐标（RA/Dec）用于标签
+    name_col = _pick_name_col(df)
+    names = (df[name_col].astype(str).fillna("").tolist()
+             if name_col else [f"Obj {i}" for i in range(len(df))])
+
+    # RA/Dec 尽量给出（没有就 NaN；标签会自动只显示名字）
+    ra_col = _pick_col_like(df, ["ra", "ra_deg", "ra_str"])
+    dec_col = _pick_col_like(df, ["dec", "dec_deg", "decl", "declination", "dec_str"])
+    if ra_col is not None:
+        ra_deg = _series_to_deg(df[ra_col], "ra").round(6).tolist()
+    else:
+        ra_deg = [float("nan")] * len(df)
+    if dec_col is not None:
+        dec_deg = _series_to_deg(df[dec_col], "dec").round(6).tolist()
+    else:
+        dec_deg = [float("nan")] * len(df)
 
     data = {
         "positions": pos[["x","y","z"]].round(3).to_numpy().tolist(),
         "colors": colors,
         "pointSize": float(point_size),
+        "names": names,
+        "ra": ra_deg,
+        "dec": dec_deg,
     }
     jsdata = json.dumps(data)
 
+    # HTML + Three.js（带最近 5 颗星高亮 + 标签 + Reset view）
     return f"""
 <!DOCTYPE html>
 <html>
@@ -140,18 +163,37 @@ def render_universe_html(df: pd.DataFrame,
   .legend {{
     position:absolute; top:12px; left:12px; z-index:10;
     background:rgba(11,16,32,.6); border:1px solid #1D2A55; color:#E6EDF3;
-    padding:8px 10px; border-radius:10px; font:13px/1.2 sans-serif;
+    padding:8px 10px; border-radius:10px; font:13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial;
   }}
   .legend .dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }}
+  .reset-btn {{
+    position:absolute; left:12px; z-index:11;
+    background:#182448; border:1px solid #2E56A6; color:#E6EDF3;
+    padding:6px 10px; border-radius:8px; font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial;
+    cursor:pointer; user-select:none;
+    transition:all .15s ease;
+  }}
+  .reset-btn:hover {{ filter:brightness(1.15); }}
+  .labels {{ position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:12; }}
+  .label {{
+    position:absolute; transform:translate(-50%,-120%);
+    padding:4px 6px; border-radius:6px; white-space:nowrap;
+    background:rgba(13,22,46,.85); border:1px solid #2E56A6; color:#E6EDF3;
+    font:12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial;
+    box-shadow:0 2px 6px rgba(0,0,0,.35);
+  }}
 </style>
 </head>
 <body>
-<div class="legend">
-  <div><span class="dot" style="background:#2E56A6"></span>Confirmed / With exoplanet</div>
+<div class="legend" id="legend">
+  <div><span class="dot" style="background:#66B2FF"></span>Confirmed / With exoplanet</div>
   <div><span class="dot" style="background:#E45757"></span>No exoplanet / False positive</div>
-  <div><span class="dot" style="background:#666a7a"></span>Unknown / Candidate</div>
+  <div><span class="dot" style="background:#8A93A6"></span>Unknown / Candidate</div>
+  <div><span class="dot" style="background:#ffbb55"></span>Solar System</div>
 </div>
+<button class="reset-btn" id="resetBtn" style="top:72px;">Reset view</button>
 <canvas id="c"></canvas>
+<div class="labels" id="labels"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
@@ -161,11 +203,12 @@ def render_universe_html(df: pd.DataFrame,
   renderer.setPixelRatio(window.devicePixelRatio || 1);
   const scene = new THREE.Scene();
 
-  // 相机（用球坐标 + 自己写的控制器）
+  // 相机：球坐标控制（左键旋转、滚轮缩放）
   const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 5000);
   let radius = 160, minR = 30, maxR = 500;
   let theta  = Math.PI/6;    // 水平角
   let phi    = Math.PI/3;    // 仰角（0~PI）
+  const DEFAULT = {{ r:160, t:Math.PI/6, p:Math.PI/3 }};
   function updateCam(){{
     const x = radius * Math.sin(phi) * Math.cos(theta);
     const y = radius * Math.cos(phi);
@@ -173,26 +216,24 @@ def render_universe_html(df: pd.DataFrame,
     camera.position.set(x, y, z);
     camera.lookAt(0,0,0);
   }}
-  updateCam();
+  function resetView(){{
+    radius = DEFAULT.r; theta = DEFAULT.t; phi = DEFAULT.p; updateCam();
+  }}
+  resetView();
 
-  // 光 & 中心“太阳”
+  // 灯光 & 太阳
   scene.add(new THREE.AmbientLight(0x99aadd, 0.6));
-  const sunLight = new THREE.PointLight(0xffcc88, 1.2, 0, 2);
-  scene.add(sunLight);
-  const sun = new THREE.Mesh(
-      new THREE.SphereGeometry(3,24,24),
-      new THREE.MeshBasicMaterial({{ color:0xffbb55 }})
-  );
-  scene.add(sun);
+  const sunLight = new THREE.PointLight(0xffcc88, 1.2, 0, 2); scene.add(sunLight);
+  const sun = new THREE.Mesh(new THREE.SphereGeometry(3,24,24), new THREE.MeshBasicMaterial({{ color:0xffbb55 }})); scene.add(sun);
 
-  // 参考环
+  // 参考环（ecliptic）
   const ring = new THREE.Mesh(
       new THREE.TorusGeometry(120, 0.08, 8, 220),
       new THREE.MeshBasicMaterial({{ color:0x1d2a55 }})
   );
-  ring.rotation.x = Math.PI/2;
-  scene.add(ring);
+  ring.rotation.x = Math.PI/2; scene.add(ring);
 
+  // 生成一个圆形、带柔和边缘的纹理，用作点精灵
   function makeCircleTexture(){{
     const s = 64;
     const canvas = document.createElement('canvas');
@@ -251,7 +292,60 @@ def render_universe_html(df: pd.DataFrame,
   const points = new THREE.Points(geo, mat);
   scene.add(points);
 
-  // —— 自写交互：左键旋转，滚轮缩放（右键平移可以后续加）——
+  // —— 最近 5 颗星：实心高亮 + 标签 —— //
+  const HILIGHT_COUNT = 5;
+  const highlightGroup = new THREE.Group(); scene.add(highlightGroup);
+  const labelsRoot = document.getElementById('labels');
+  let labelElems = [];  // {{ i, el }}
+
+  function rebuildHighlights(indexes){{
+    highlightGroup.clear();     // 保留接口，将来想画外圈可用
+  labelsRoot.innerHTML = "";
+  labelElems = [];
+
+  indexes.forEach(i => {{
+    // 仅创建 DOM 标签
+    const el = document.createElement('div');
+    el.className = "label";
+    const name = DATA.names?.[i] || ("Obj " + i);
+
+    const hasRA  = Number.isFinite(DATA.ra?.[i]);
+    const hasDec = Number.isFinite(DATA.dec?.[i]);
+    el.textContent = (hasRA && hasDec)
+      ? `${{name}} (RA ${{DATA.ra[i].toFixed(3)}}°, Dec ${{DATA.dec[i].toFixed(3)}}°)`
+      : name;
+
+    labelsRoot.appendChild(el);
+    labelElems.push({{ i, el }});
+  }});
+  }}
+
+  const tmp = new THREE.Vector3();
+  function pickNearestK(cameraPos){{
+    // 简单 O(N) 取最近 K 个
+    const idx = new Array(N).fill(0).map((_,i)=>i);
+    idx.sort((a,b) => {{
+      const pa=DATA.positions[a], pb=DATA.positions[b];
+      const da=(pa[0]-cameraPos.x)**2+(pa[1]-cameraPos.y)**2+(pa[2]-cameraPos.z)**2;
+      const db=(pb[0]-cameraPos.x)**2+(pb[1]-cameraPos.y)**2+(pb[2]-cameraPos.z)**2;
+      return da - db;
+    }});
+    return idx.slice(0, HILIGHT_COUNT);
+  }}
+
+  function layoutLabels(){{
+    const w = canvas.clientWidth || window.innerWidth;
+    const h = canvas.clientHeight || window.innerHeight || 560;
+    labelElems.forEach(({{ i, el }}) => {{
+      const p = DATA.positions[i];
+      tmp.set(p[0], p[1], p[2]).project(camera);
+      const x = (tmp.x * .5 + .5) * w;
+      const y = (-tmp.y * .5 + .5) * h;
+      el.style.transform = `translate(${{x}}px, ${{y}}px) translate(-50%, -120%)`;
+    }});
+  }}
+
+  // 交互：左键旋转，滚轮缩放
   canvas.style.cursor = 'grab';
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener('mousedown', e => {{ dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.style.cursor='grabbing'; e.preventDefault(); }});
@@ -264,17 +358,26 @@ def render_universe_html(df: pd.DataFrame,
     const ROT = 0.005;
     theta -= dx * ROT;
     phi   -= dy * ROT;
-    const EPS = 0.001;
     phi = Math.min(Math.PI - 0.1, Math.max(0.1, phi));
     updateCam();
   }});
-  // 缩放
   canvas.addEventListener('wheel', e => {{
     e.preventDefault();
     const zoom = Math.exp(e.deltaY * 0.001);
     radius = Math.min(maxR, Math.max(minR, radius * zoom));
     updateCam();
   }}, {{ passive:false }});
+
+  // Reset 按钮（放在 Legend 下方）
+  const legend = document.getElementById('legend');
+  const resetBtn = document.getElementById('resetBtn');
+  function placeReset(){{
+    const box = legend.getBoundingClientRect();
+    resetBtn.style.top = (box.bottom - box.top + 20) + "px";
+  }}
+  placeReset();
+  window.addEventListener('resize', placeReset);
+  resetBtn.addEventListener('click', () => {{ resetView(); }})
 
   // 自适应
   function setSize(){{
@@ -287,9 +390,20 @@ def render_universe_html(df: pd.DataFrame,
   setSize();
   window.addEventListener('resize', setSize);
 
-  // 动画
+  // 动画循环：每 10 帧更新一次“最近 5 颗”
+  let frame = 0, lastPicked = [];
   function tick(){{
+    frame++;
     sun.rotation.y += 0.002;
+    if (frame % 10 === 0) {{
+      const picked = pickNearestK(camera.position);
+      // 避免没必要的 DOM/mesh 重建
+      if (picked.join(",") !== lastPicked.join(",")) {{
+        lastPicked = picked;
+        rebuildHighlights(picked);
+      }}
+    }}
+    layoutLabels();
     renderer.setClearColor(0x0B1020, 1);
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
@@ -365,3 +479,22 @@ def _series_to_deg(series: pd.Series, kind: str) -> pd.Series:
     else:
         out = out.clip(-90, 90)
     return out
+
+def _pick_name_col(df: pd.DataFrame) -> str | None:
+    """尽量找一个“名字/编号”列用于标签显示。"""
+    candidates = [
+        # 常见 exoplanet / TESS / Kepler 命名
+        "pl_name", "pl_hostname",
+        "koi_name", "kepoi_name", "koi", "kepid",
+        "tic", "tic_id", "toi", "toi_id",
+        "object", "obj_id", "id", "name", "designation", "hostname",
+    ]
+    lowers = {c.lower(): c for c in df.columns}
+    for k in candidates:
+        if k in lowers:
+            return lowers[k]
+    # 兜底：挑一个最像“名字”的列
+    for c in df.columns:
+        if any(s in c.lower() for s in ["name", "id", "host", "obj", "tic", "kep"]):
+            return c
+    return None
