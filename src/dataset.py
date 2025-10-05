@@ -1,6 +1,6 @@
 import pandas as pd
 from .io_utils import read_nasa_table
-from .harmonize import harmonize_table          # 只从 harmonize 拿函数
+from .harmonize import harmonize_table
 from .config import CANON_ORDER 
 
 def _label_count_safe(d: pd.DataFrame) -> int:
@@ -30,12 +30,12 @@ def load_all(koi_csv: str | None, toi_csv: str | None, k2_csv: str | None) -> pd
     df_all = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
     print("Concat rows:", len(df_all))
 
-    # 只用实际存在的特征列
+    # Only use features that actually exist
     need_cols = [c for c in CANON_ORDER if c in df_all.columns]
     if "label" in df_all.columns:
         df_all = df_all.dropna(subset=need_cols + ["label"])
     else:
-        raise RuntimeError("合并后仍没有 label 列，请检查处置列识别是否成功（例如 tfopwg_disp）。")
+        raise RuntimeError("After merging, there is still no label column. Please check whether the treatment column is recognised successfully (for example tfopwg_disp)")
 
     print("After dropna rows:", len(df_all))
     df_all = pd.get_dummies(df_all, columns=["mission"], drop_first=False)

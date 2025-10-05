@@ -1,4 +1,4 @@
-# app.py —— Streamlit 前端，复用 src/ 内模块
+# app.py —— Streamlit front-end, reusing modules in src/
 import io
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ st.set_page_config(page_title="Exoplanet ML Explorer", layout="wide")
 inject_css()
 title_bar()
 
-# ---------------- 读上传文件 --------------
+# ---------------- Read uploaded files --------------
 def read_uploaded(file):
     if file is None:
         return None
@@ -29,7 +29,7 @@ def read_uploaded(file):
     data = file.read()
     if name.endswith((".xls", ".xlsx")):
         return pd.read_excel(io.BytesIO(data))
-    # CSV/TSV（带 # 注释也兼容）
+    # CSV/TSV (also supports lines commented with '#')
     try:
         return pd.read_csv(io.BytesIO(data), comment="#", low_memory=False)
     except Exception:
@@ -46,12 +46,12 @@ with st.sidebar:
     n_estimators = st.slider("RF trees", 100, 1000, 400, 50)
     rs           = st.number_input("Random state", 0, 9999, 42, step=1)
 
-# ---------------- 统一与合并 --------------
+# ---------------- Harmonize & merge --------------
 dfs = []
 for up, mission in [(koi_up, "Kepler"), (tess_up, "TESS"), (k2_up, "K2")]:
     raw = read_uploaded(up)
     if raw is not None:
-        h = harmonize_table(raw, mission)  # 内部已尽量保留 ra/dec/dist_raw
+        h = harmonize_table(raw, mission)  # tries to keep ra/dec/dist_raw internally
         st.sidebar.write(f"{mission}: {len(h)} row | with label: {h['label'].notna().sum()}")
         dfs.append(h)
 
@@ -61,47 +61,66 @@ if not dfs:
 
 df_all = pd.concat(dfs, ignore_index=True)
 
-# 3D 宇宙视图（使用合并后的全量数据；_to_xyz 会优先用 RA/DEC）
+# 3D universe view (uses merged full dataset; _to_xyz prefers RA/DEC)
 html(render_universe_html(df_all, color_by="label", max_points=6000, point_size=1.8), height=560)
 
-# ---------------- 训练数据准备（仅物理特征，不把距离当特征） ----------------
-# 只保留有标签 0/1 的样本
+# ---------------- Training data prep (only physical features; do not use distance as a feature) ----------------
+# Keep only samples with label 0/1
 df_lab = df_all[df_all["label"].isin([0, 1])].copy()
 if df_lab.empty:
     st.error("Examples with no available labels (label is 0/1).")
     st.stop()
 
-# 物理特征白名单（先去掉真实行星半径，防止泄漏）
-LEAKY = {"prad", "pl_rade", "planet_radius"}
-feature_cols = [c for c in CANON_ORDER if c in df_lab.columns and c not in LEAKY]
+# —— After df_lab is defined and before feature selection ——
+BASE_LEAKY = {
+    "prad", "koi_prad", "planet_radius",  # explicit planetary-radius columns
+    "pl_rade", "pl_radj", "pl_rads",      # NASA confirmed radii
+    "pl_orbper", "koi_prad",              # period tied to confirmed planets (different from KOI/TCE period)
+}
 
-# ——可选：把 depth 统一成分数（0.01 表示 1%），避免某些数据用 % 或 ppm——
+# Auto blacklist: any column containing 'prad' (but not 'srad'), or ending with '_radius',
+# or 'pl_' columns that include radius/mass/orbit information
+auto_leaky = set()
+for c in df_lab.columns:
+    cl = c.lower()
+    if ("prad" in cl and not cl.startswith("srad")):   # catches prad, prad_est, koi_prad... but keeps srad
+        auto_leaky.add(c)
+    if cl.endswith("_radius"):
+        auto_leaky.add(c)
+    if cl.startswith("pl_") and any(k in cl for k in ["rad", "mass", "orb"]):
+        auto_leaky.add(c)
+
+LEAKY = BASE_LEAKY | auto_leaky
+
+# Pick only from CANON_ORDER and exclude the blacklist
+feature_cols = [c for c in CANON_ORDER if c in df_lab.columns and c not in LEAKY]
+num_feats = df_lab[feature_cols].apply(pd.to_numeric, errors="coerce")
+
+# —— Optional: normalize depth to a fraction (0.01 means 1%) to handle %, ppm, etc. ——
 def depth_to_fraction(s):
     d = pd.to_numeric(s, errors="coerce")
     out = d.copy()
-    # 0~1 视为分数；1~100 视为百分比；>100 视为 ppm
+    # 0–1 as fraction; 1–100 as percent; >100 as ppm
     out[(d > 1) & (d <= 100)] = d[(d > 1) & (d <= 100)] / 100.0
     out[d > 100] = d[d > 100] / 1e6
     return out
 
-# 工程化半径：prad_est = srad * sqrt(depth_fraction)
+# Engineered radius: prad_est = srad * sqrt(depth_fraction)
 if {"srad", "depth"}.issubset(df_lab.columns):
     srad  = pd.to_numeric(df_lab["srad"], errors="coerce")
     depth = depth_to_fraction(df_lab["depth"])
     df_lab["prad_est"] = srad * np.sqrt(depth)
-    feature_cols.append("prad_est")
 
-# 生成数值特征矩阵（现在会包含 prad_est，而不含 prad）
+# Build numeric feature matrix (now may include prad_est, but not prad)
 num_feats = df_lab[feature_cols].apply(pd.to_numeric, errors="coerce")
 
-
-# 丢掉“整列皆缺失”的特征，避免插补失败
+# Drop features that are entirely missing to avoid imputer failure
 all_nan_cols = [c for c in num_feats.columns if num_feats[c].notna().sum() == 0]
 if all_nan_cols:
     st.warning(f"These features are all missing in the current data and have been ignored：{all_nan_cols}")
     num_feats = num_feats.drop(columns=all_nan_cols)
 
-# mission one-hot（不保留原始 mission 列）
+# mission one-hot (do not keep the original 'mission' column)
 if "mission" in df_lab.columns and df_lab["mission"].nunique() > 1:
     df_lab = pd.get_dummies(df_lab, columns=["mission"], drop_first=True)
     mission_cols = [c for c in df_lab.columns if c.startswith("mission_")]
@@ -109,11 +128,11 @@ else:
     df_lab = df_lab.drop(columns=[c for c in ["mission"] if c in df_lab.columns])
     mission_cols = []
 
-# 组装 X / y（仅物理特征 + mission one-hot）
+# Assemble X / y (physical features + mission one-hot only)
 X = pd.concat([num_feats, df_lab[mission_cols]], axis=1).select_dtypes(include=["number"])
 y = df_lab["label"].astype(int)
 
-# 基本检查
+# Basic checks
 if X.shape[1] == 0:
     st.error("Available physical features are listed as 0. Please check your upload data or reduce the required features.")
     st.stop()
@@ -121,16 +140,16 @@ if len(X) < 2:
     st.error(f"Insufficient number of trainable samples after cleaning ({len(X)}).")
     st.stop()
 
-# 分层仅当类别≥2
+# Use stratify only when there are at least two classes
 stratify_y = y if y.nunique() > 1 else None
 
-# 计算“可行”的 test_size：至少 1 条训练 + 1 条测试
+# Compute a feasible test_size: at least 1 train + 1 test
 n = len(X)
 n_test = max(1, int(round(n * test_size)))
 n_test = min(n - 1, n_test)
 test_size_eff = n_test / n
 
-# 切分：分层失败就降级非分层
+# Split; if stratified split fails, fall back to non-stratified
 try:
     X_tr, X_te, y_tr, y_te = train_test_split(
         X, y, test_size=test_size_eff, random_state=rs, stratify=stratify_y
@@ -140,7 +159,7 @@ except ValueError:
         X, y, test_size=test_size_eff, random_state=rs, stratify=None
     )
 
-# ---------------- 训练 ----------------
+# ---------------- Train ----------------
 model = make_pipeline(
     SimpleImputer(strategy="median"),
     StandardScaler(),
@@ -152,18 +171,18 @@ model = make_pipeline(
 model.fit(X_tr, y_tr)
 rf = model.named_steps["randomforestclassifier"]
 
-# hold-out 概率与 “参考阈值”
+# Hold-out probabilities and a “reference threshold”
 y_proba = model.predict_proba(X_te)[:, 1]
 prec0, rec0, thr0 = precision_recall_curve(y_te, y_proba)
 f10 = 2 * prec0 * rec0 / (prec0 + rec0 + 1e-9)
 best_idx0 = int(np.nanargmax(f10)) if len(thr0) else 0
 best_thr0 = float(thr0[max(min(best_idx0, len(thr0) - 1), 0)]) if len(thr0) else 0.5
 
-# 统一的阈值状态（让“表格在上，滑杆在下”也能同步）
+# Unified threshold in session state (so table above and slider below stay in sync)
 st.session_state.setdefault("thr", float(best_thr0))
 thr_now = float(st.session_state["thr"])
 
-# ---------------- 结果浏览 / 下载（放在前面，用当前阈值） ----------------
+# ---------------- Browse / Download results (put first; use current threshold) ----------------
 st.subheader("3) Browse / Download Results")
 pred_df = pd.DataFrame(
     {"y_true": y_te.values, "proba": y_proba, "pred": (y_proba >= thr_now).astype(int)},
@@ -187,7 +206,7 @@ st.download_button(
     mime="text/csv"
 )
 
-# ---------------- 评估模式 & 指标（放在后面，滑杆更新全局阈值） ----------------
+# ---------------- Evaluation mode & metrics (placed later; slider updates global threshold) ----------------
 st.subheader("4) Thresholds and indicators")
 mode = st.radio(
     "Evaluate on",
@@ -206,7 +225,7 @@ if use_mode == "Hold-out test set":
 elif use_mode == "All labeled (in-sample)":
     y_eval = y
     proba_eval = model.predict_proba(X)[:, 1]
-else:  # 5-fold CV（管道与训练一致，含插补）
+else:  # 5-fold CV (pipeline matches training, including imputation)
     base_pipe = make_pipeline(
         SimpleImputer(strategy="median"),
         StandardScaler(),
@@ -224,13 +243,13 @@ else:  # 5-fold CV（管道与训练一致，含插补）
         proba_eval = cross_val_predict(base_pipe, X, y, cv=skf, method="predict_proba")[:, 1]
         y_eval = y
 
-# 用 proba_eval + 阈值做所有指标/曲线/混淆矩阵
+# Use proba_eval + threshold to compute metrics/curves/confusion matrix
 prec, rec, thr = precision_recall_curve(y_eval, proba_eval)
 f1 = 2 * prec * rec / (prec + rec + 1e-9)
 best_idx = int(np.nanargmax(f1)) if len(thr) else 0
 best_thr = float(thr[max(min(best_idx, len(thr) - 1), 0)]) if len(thr) else best_thr0
 
-# 阈值滑杆（同步 st.session_state['thr']）
+# Threshold slider (sync with st.session_state['thr'])
 sel_thr = st.slider("Decision threshold", 0.0, 1.0, step=0.01, key="thr")
 y_pred_eval = (proba_eval >= sel_thr).astype(int)
 
@@ -251,7 +270,7 @@ st.pyplot(fig_imp, clear_figure=True, use_container_width=False)
 # ② Confusion Matrix
 st.subheader("Confusion Matrix")
 
-# 1) 用 session_state 记住当前是否归一化
+# 1) Use session_state to remember whether normalization is on
 if "cm_norm" not in st.session_state:
     st.session_state.cm_norm = False
 
@@ -283,10 +302,10 @@ with c2:
         """
     )
 
-    # 2) 这个按钮就放在这句旁边：做两列，左边放这句话，右边放按钮
+    # 2) Put the button next to the note above: two columns; text on the left, button on the right
     msg_col, btn_col = st.columns([4, 2])
     with msg_col:
-        st.write("")  # 占位，让两列对齐
+        st.write("")  # spacer so the two columns align
     with btn_col:
         st.button(
             "Change to normalization graph" if not st.session_state.cm_norm else "Show counts",
@@ -305,7 +324,7 @@ with c1:
 with c2:
     st.pyplot(plot_pr_dark(y_eval, proba_eval), clear_figure=True)
 
-# 简短说明（放在两个折线图下面）
+# Brief notes (under the two line charts)
 st.markdown(
     """
 **What they mean:**

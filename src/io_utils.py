@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 
 def read_nasa_table(path: str | Path) -> pd.DataFrame:
-    """兼容 NASA CSV（含 # 注释）和 Excel。自动推断分隔符。"""
+    """Compatible with NASA CSV (including # comments) and Excel. Automatically infers delimiters."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(p)
@@ -10,7 +10,7 @@ def read_nasa_table(path: str | Path) -> pd.DataFrame:
     if p.suffix.lower() in [".xls", ".xlsx"]:
         return pd.read_excel(p)
 
-    # CSV/TSV：优先 ','，失败再自动推断
+    # CSV/TSV: Prefer ',' first, fallback to auto detection if that fails
     try:
         return pd.read_csv(p, comment="#", low_memory=False)
     except Exception:

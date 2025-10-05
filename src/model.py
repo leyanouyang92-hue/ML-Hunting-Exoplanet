@@ -14,7 +14,7 @@ __all__ = ["train_and_eval"]
 
 def train_and_eval(df_all: pd.DataFrame, random_state: int = 42) -> Tuple[object, pd.Series]:
     """Train RF + evaluate + draw charts. Returns (model, y_proba_on_test)."""
-    # 防止误删到列名
+    # Prevent accidental deletion of column names
     assert "label" in df_all.columns, "df_all 缺少 label 列"
     X = df_all.drop(columns=[c for c in ["label", "label_raw"] if c in df_all.columns])
     y = df_all["label"].astype(int)
@@ -35,12 +35,12 @@ def train_and_eval(df_all: pd.DataFrame, random_state: int = 42) -> Tuple[object
     )
     model.fit(X_tr, y_tr)
 
-    # 概率与最佳阈值（用 PR 曲线）
+    # Probability and optimal threshold (using PR curve)
     y_proba = model.predict_proba(X_te)[:, 1]
     precision, recall, thresholds = precision_recall_curve(y_te, y_proba)
     f1 = 2 * precision * recall / (precision + recall + 1e-9)
     best_idx = int(np.nanargmax(f1))
-    # thresholds 长度比 precision/recall 少 1，做一下边界处理
+    # The length of thresholds is 1 less than precision/recall, perform some boundary handling
     thr = thresholds[max(min(best_idx, len(thresholds) - 1), 0)] if len(thresholds) else 0.5
 
     y_pred_best = (y_proba >= thr).astype(int)
@@ -49,7 +49,7 @@ def train_and_eval(df_all: pd.DataFrame, random_state: int = 42) -> Tuple[object
     print("Report @ best threshold:\n", classification_report(y_te, y_pred_best))
     print(confusion_matrix(y_te, y_pred_best))
 
-    # 可视化
+    # Visualisation
     rf = model.named_steps["randomforestclassifier"]
     plot_dashboard(rf, X.columns.tolist(), y_te, y_pred_best, y_proba, X_te_yte=(X_te, y_te))
 

@@ -1,5 +1,4 @@
 import streamlit as st
-# src/ui.py 里新增
 import json
 import numpy as np
 import pandas as pd
@@ -9,7 +8,7 @@ import re
 def inject_css():
     st.markdown("""
     <style>
-      /* 顶栏透明，但保留，内容整体往下推一点 */
+      /* Top BAr */
       header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
       .block-container { padding-top: 4.2rem !important; padding-bottom: .8rem; }
 
@@ -30,10 +29,10 @@ def inject_css():
       .stSlider > div > div > div[role='slider'] { background: #2E56A6; border: 2px solid #2E56A6; }
       .stSlider > div > div > div[data-baseweb="slider"] > div { background: #24407d; }
 
-      /* Footer 隐藏 */
+      /* Footer */
       footer {visibility: hidden;}
 
-      /* 小屏适配：标题略小、顶距略小 */
+      /* Small screen adaptation */
       @media (max-width: 768px){
         .block-container { padding-top: 3.6rem !important; }
         .big-title { font-size: 1.8rem; }
@@ -61,7 +60,6 @@ def _pick_col_like(df: pd.DataFrame, keys: list[str]) -> str | None:
     for k in keys:
         if k.lower() in lowers:
             return lowers[k.lower()]
-    # 含义相近的兜底
     for c in df.columns:
         lc = c.lower().replace("_", " ")
         if any(k in lc for k in keys):
@@ -69,24 +67,24 @@ def _pick_col_like(df: pd.DataFrame, keys: list[str]) -> str | None:
     return None
 
 def _to_xyz(df: pd.DataFrame) -> pd.DataFrame:
-    """优先用 RA/Dec(/distance) 转 3D；否则把样本均匀撒在壳层上（可复现）。"""
+    """Prefer converting RA/Dec(/distance) to 3D; otherwise, evenly distribute the samples on the shell layer (reproducible)。"""
     ra_col = _pick_col_like(df, ["ra", "ra_deg"])
     dec_col = _pick_col_like(df, ["dec", "dec_deg", "decl", "declination"])
     dist_col = _pick_col_like(df, ["dist", "distance", "st_dist", "parallax"])
 
     n = len(df)
-    rng = np.random.default_rng(42)  # 固定种子，保证每次位置一致
+    rng = np.random.default_rng(42)  # Set a fixed seed to ensure the position is consistent every time
     if ra_col is not None and dec_col is not None:
         ra = pd.to_numeric(df[ra_col], errors="coerce").to_numpy(dtype=float)
         dec = pd.to_numeric(df[dec_col], errors="coerce").to_numpy(dtype=float)
-        # 角度→弧度
+        # Degrees→Radians
         ra_r = np.deg2rad(np.nan_to_num(ra, nan=rng.uniform(0, 360, n)))
         dec_r = np.deg2rad(np.nan_to_num(dec, nan=rng.uniform(-90, 90, n)))
-        # 距离缩放：可视化半径 120 左右
+        # Distance scaling: visual radius around 120
         if dist_col is not None:
             d_raw = pd.to_numeric(df[dist_col], errors="coerce").to_numpy(dtype=float)
             d = np.nan_to_num(d_raw, nan=1.0)
-            d = 40 + 80 * (d / (np.nanpercentile(d, 95) + 1e-9))  # 截尾到 95 分位
+            d = 40 + 80 * (d / (np.nanpercentile(d, 95) + 1e-9))
             d = np.clip(d, 30, 120)
         else:
             d = rng.uniform(60, 120, n)
@@ -94,7 +92,7 @@ def _to_xyz(df: pd.DataFrame) -> pd.DataFrame:
         y = d * np.sin(dec_r)
         z = d * np.cos(dec_r) * np.sin(ra_r)
     else:
-        # 没有 RA/Dec，就随机均匀撒点（壳层）
+        # Without RA/Dec, just scatter points randomly and uniformly (shell layer)
         r = rng.uniform(60, 120, n)
         theta = rng.uniform(0, 2*np.pi, n)
         phi = np.arccos(2*rng.random(n) - 1)
@@ -113,10 +111,10 @@ def render_universe_html(df: pd.DataFrame,
     if len(df) > max_points:
         df = df.sample(max_points, random_state=42).reset_index(drop=True)
 
-    # 位置：优先 RA/Dec，否则撒点
+    # Position: Preferably RA/Dec, otherwise just scatter
     pos = _to_xyz(df)
 
-    # 颜色：调亮蓝色（更容易与灰色区分）
+    # Color
     col = df[color_by] if color_by in df.columns else pd.Series([np.nan]*len(df))
     colors = []
     for v in col:
@@ -124,12 +122,12 @@ def render_universe_html(df: pd.DataFrame,
         elif int(v) == 1: colors.append("#66B2FF")   # confirmed（更亮的蓝）
         else: colors.append("#E45757")               # false positive（红）
 
-    # 名称 + 坐标（RA/Dec）用于标签
+    # Name + Location
     name_col = _pick_name_col(df)
     names = (df[name_col].astype(str).fillna("").tolist()
              if name_col else [f"Obj {i}" for i in range(len(df))])
 
-    # RA/Dec 尽量给出（没有就 NaN；标签会自动只显示名字）
+    # Provide RA/Dec if possible (if not, use NaN; the label will automatically show only the name)
     ra_col = _pick_col_like(df, ["ra", "ra_deg", "ra_str"])
     dec_col = _pick_col_like(df, ["dec", "dec_deg", "decl", "declination", "dec_str"])
     if ra_col is not None:
@@ -151,7 +149,6 @@ def render_universe_html(df: pd.DataFrame,
     }
     jsdata = json.dumps(data)
 
-    # HTML + Three.js（带最近 5 颗星高亮 + 标签 + Reset view）
     return f"""
 <!DOCTYPE html>
 <html>
@@ -203,11 +200,10 @@ def render_universe_html(df: pd.DataFrame,
   renderer.setPixelRatio(window.devicePixelRatio || 1);
   const scene = new THREE.Scene();
 
-  // 相机：球坐标控制（左键旋转、滚轮缩放）
   const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 5000);
   let radius = 160, minR = 30, maxR = 500;
-  let theta  = Math.PI/6;    // 水平角
-  let phi    = Math.PI/3;    // 仰角（0~PI）
+  let theta  = Math.PI/6;    // Horizontal angle
+  let phi    = Math.PI/3;    // Elevation angle (0~PI)
   const DEFAULT = {{ r:160, t:Math.PI/6, p:Math.PI/3 }};
   function updateCam(){{
     const x = radius * Math.sin(phi) * Math.cos(theta);
@@ -221,19 +217,19 @@ def render_universe_html(df: pd.DataFrame,
   }}
   resetView();
 
-  // 灯光 & 太阳
+  // Light + Sun
   scene.add(new THREE.AmbientLight(0x99aadd, 0.6));
   const sunLight = new THREE.PointLight(0xffcc88, 1.2, 0, 2); scene.add(sunLight);
   const sun = new THREE.Mesh(new THREE.SphereGeometry(3,24,24), new THREE.MeshBasicMaterial({{ color:0xffbb55 }})); scene.add(sun);
 
-  // 参考环（ecliptic）
+  // Reference ring（ecliptic）
   const ring = new THREE.Mesh(
       new THREE.TorusGeometry(120, 0.08, 8, 220),
       new THREE.MeshBasicMaterial({{ color:0x1d2a55 }})
   );
   ring.rotation.x = Math.PI/2; scene.add(ring);
 
-  // 生成一个圆形、带柔和边缘的纹理，用作点精灵
+  // Generate a circular texture with soft edges to be used as a point sprite
   function makeCircleTexture(){{
     const s = 64;
     const canvas = document.createElement('canvas');
@@ -254,14 +250,11 @@ def render_universe_html(df: pd.DataFrame,
     return tex;
   }}
 
-  // 点云（位置/颜色同原来）
+  // Point cloud (position/color same as original)
   const N = DATA.positions.length;
   const geo = new THREE.BufferGeometry();
   const pos = new Float32Array(N * 3);
   const col = new Float32Array(N * 3);
-
-  // 可选：极小抖动，弱化“网格感”（按需打开）
-  // const JITTER = 0.05;
 
   for (let i = 0; i < N; i++) {{
     const p = DATA.positions[i];
@@ -280,11 +273,10 @@ def render_universe_html(df: pd.DataFrame,
   const dotTex = makeCircleTexture();
   const mat = new THREE.PointsMaterial({{
     size: DATA.pointSize,
-    map: dotTex,               // 用圆形纹理做点
+    map: dotTex,
     transparent: true,
-    alphaTest: 0.35,           // 过滤掉边缘透明像素，避免锯齿
-    depthWrite: false,         // 不写深度，叠加更柔和
-    blending: THREE.AdditiveBlending, // 发光叠加效果（想要更朴素可去掉这行）
+    alphaTest: 0.35,
+    depthWrite: false,
     vertexColors: true,
     sizeAttenuation: true
   }});
@@ -292,19 +284,18 @@ def render_universe_html(df: pd.DataFrame,
   const points = new THREE.Points(geo, mat);
   scene.add(points);
 
-  // —— 最近 5 颗星：实心高亮 + 标签 —— //
+  // —— Closest 5 stars: tags —— //
   const HILIGHT_COUNT = 5;
-  const highlightGroup = new THREE.Group(); scene.add(highlightGroup);
+  /*const highlightGroup = new THREE.Group(); scene.add(highlightGroup);*/
   const labelsRoot = document.getElementById('labels');
   let labelElems = [];  // {{ i, el }}
 
   function rebuildHighlights(indexes){{
-    highlightGroup.clear();     // 保留接口，将来想画外圈可用
   labelsRoot.innerHTML = "";
   labelElems = [];
 
   indexes.forEach(i => {{
-    // 仅创建 DOM 标签
+    // Create DOM elements only
     const el = document.createElement('div');
     el.className = "label";
     const name = DATA.names?.[i] || ("Obj " + i);
@@ -322,7 +313,7 @@ def render_universe_html(df: pd.DataFrame,
 
   const tmp = new THREE.Vector3();
   function pickNearestK(cameraPos){{
-    // 简单 O(N) 取最近 K 个
+    // Simple O(N) to get the nearest K
     const idx = new Array(N).fill(0).map((_,i)=>i);
     idx.sort((a,b) => {{
       const pa=DATA.positions[a], pb=DATA.positions[b];
@@ -345,7 +336,7 @@ def render_universe_html(df: pd.DataFrame,
     }});
   }}
 
-  // 交互：左键旋转，滚轮缩放
+  // Interaction: Left-click to rotate, scroll wheel to zoom
   canvas.style.cursor = 'grab';
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener('mousedown', e => {{ dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.style.cursor='grabbing'; e.preventDefault(); }});
@@ -368,7 +359,7 @@ def render_universe_html(df: pd.DataFrame,
     updateCam();
   }}, {{ passive:false }});
 
-  // Reset 按钮（放在 Legend 下方）
+  // Reset button
   const legend = document.getElementById('legend');
   const resetBtn = document.getElementById('resetBtn');
   function placeReset(){{
@@ -379,7 +370,7 @@ def render_universe_html(df: pd.DataFrame,
   window.addEventListener('resize', placeReset);
   resetBtn.addEventListener('click', () => {{ resetView(); }})
 
-  // 自适应
+  // Adaptive
   function setSize(){{
     const w = canvas.clientWidth  || document.body.clientWidth  || window.innerWidth;
     const h = canvas.clientHeight || document.body.clientHeight || window.innerHeight || 560;
@@ -390,14 +381,13 @@ def render_universe_html(df: pd.DataFrame,
   setSize();
   window.addEventListener('resize', setSize);
 
-  // 动画循环：每 10 帧更新一次“最近 5 颗”
+  // Animation loop
   let frame = 0, lastPicked = [];
   function tick(){{
     frame++;
     sun.rotation.y += 0.002;
     if (frame % 10 === 0) {{
       const picked = pickNearestK(camera.position);
-      // 避免没必要的 DOM/mesh 重建
       if (picked.join(",") !== lastPicked.join(",")) {{
         lastPicked = picked;
         rebuildHighlights(picked);
@@ -416,15 +406,14 @@ def render_universe_html(df: pd.DataFrame,
 
 def _parse_sexagesimal(s: str, kind: str) -> float | float:
     """
-    把 '07h29m25.1s' / '07:29:25.1' / '07 29 25.1' / '-12d34m56' / '-12:34:56' 等
-    解析为十进制度。kind='ra' 或 'dec'。
+    Dynamic analysis is decimal-based
     """
     if s is None:
         return np.nan
     t = str(s).strip().lower()
     if not t or t in {"nan", "none"}:
         return np.nan
-    # 统一分隔符：h/d/°/'/" 统统替换为冒号
+    # Unified separator: replace all h/d/°/'/ with a colon
     t = (t.replace("−", "-")
            .replace("h", ":")
            .replace("d", ":")
@@ -433,7 +422,7 @@ def _parse_sexagesimal(s: str, kind: str) -> float | float:
         )
     t = re.sub(r"[°′’″\"]", ":", t)
     t = re.sub(r"\s+", ":", t)
-    # 处理正负号
+    # Handle positive and negative signs
     sign = 1
     if t.startswith(("+", "-")):
         if t[0] == "-":
@@ -452,28 +441,23 @@ def _parse_sexagesimal(s: str, kind: str) -> float | float:
         return sign * (abs(a) + b/60 + c/3600)
 
 def _series_to_deg(series: pd.Series, kind: str) -> pd.Series:
-    """
-    series 可能是十进制度、小时(ra)或六十进制字符串，统一转成十进制度。
-    kind='ra' 或 'dec'
-    """
     s = series.copy()
-    # 先尝试当数值
     num = pd.to_numeric(s, errors="coerce")
     out = num.astype(float)
 
-    # 对无法直接转数值的条目，尝试六十进制解析
+    # For entries that cannot be directly converted to numbers, try sexagesimal parsing
     mask = num.isna()
     if mask.any():
         out.loc[mask] = s[mask].apply(
             lambda x: _parse_sexagesimal(x, kind) if isinstance(x, str) else np.nan
         )
 
-    # RA 特例：如果是纯数字且 <=24，很可能是小时（没有任何分隔/单位）
+    # RA special case: If it is purely numerical and <=24, it is likely to be hours (with no separators/units)
     if kind == "ra":
         m_hour_like = out.notna() & (out <= 24) & (~s.astype(str).str.contains(r"[h:°d]", case=False, regex=True))
         out.loc[m_hour_like] = out.loc[m_hour_like] * 15.0
 
-    # 规范范围
+    # Scope of standards
     if kind == "ra":
         out = out % 360.0
     else:
@@ -481,9 +465,8 @@ def _series_to_deg(series: pd.Series, kind: str) -> pd.Series:
     return out
 
 def _pick_name_col(df: pd.DataFrame) -> str | None:
-    """尽量找一个“名字/编号”列用于标签显示。"""
     candidates = [
-        # 常见 exoplanet / TESS / Kepler 命名
+        # Common exoplanet / TESS / Kepler naming
         "pl_name", "pl_hostname",
         "koi_name", "kepoi_name", "koi", "kepid",
         "tic", "tic_id", "toi", "toi_id",
@@ -493,7 +476,6 @@ def _pick_name_col(df: pd.DataFrame) -> str | None:
     for k in candidates:
         if k in lowers:
             return lowers[k]
-    # 兜底：挑一个最像“名字”的列
     for c in df.columns:
         if any(s in c.lower() for s in ["name", "id", "host", "obj", "tic", "kep"]):
             return c

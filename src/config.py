@@ -1,4 +1,4 @@
-# 统一后的特征名与候选列名
+# Canonical feature names and their alias candidates
 CANON_FEATURES = {
     "period":   ["koi_period","pl_orbper","orbital period","orbital_period","period","per"],
     "duration": ["koi_duration","transit duration","transit_duration","tran_dur","duration","dur"],
@@ -7,20 +7,20 @@ CANON_FEATURES = {
     "srad":     ["koi_srad","st_rad","stellar radius","stellar_radius","srad"],
     "steff":    ["koi_steff","st_teff","stellar teff","stellar_teff","stellar effective temperature","teff"],
 }
-CANON_ORDER = ["period","duration","depth","prad","srad","steff"]
+CANON_ORDER = ["period", "duration", "depth", "srad", "steff"]
 
-# 处置列候选
+# Disposition column candidates
 DISP_CANDS = [
     "koi_disposition",               # Kepler
     "tfopwg_disposition", "tfopwg disp",
     "archive_disposition", "disposition", "final_disposition", "toi_disposition",
 ]
 
-# 标签映射（统一到 0/1）
+# Label mapping (normalized to 0/1)
 LABEL_MAP = {
-    # 正类
+    # Positive class
     "CONFIRMED": 1, "CONFIRMED PLANET": 1, "VALIDATED PLANET": 1, "TRUE POSITIVE": 1,
     "CP": 1, "KP": 1,   # TESS: Confirmed Planet / Known Planet
-    # 负类
+    # Negative class
     "FALSE POSITIVE": 0, "FALSE-POSITIVE": 0, "FP": 0, "RETRACTED": 0,
 }
